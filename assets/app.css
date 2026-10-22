@@ -1,6 +1,8 @@
 /* Painel DN25001 — complementos de layout sobre o design system (bundle.css). Só tokens. */
 [hidden] { display: none !important; }
 html, body { min-height: 100%; }
+/* a coluna do conteúdo não cresce com tabelas largas: elas rolam dentro do próprio quadro */
+.dt-main { grid-template-columns: minmax(0, 1fr); }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) .dt-logo img { display: none; }
   :root:not([data-theme="light"]) .dt-logo-text { display: inline; }

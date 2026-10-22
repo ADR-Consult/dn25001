@@ -17,14 +17,14 @@
   DT.STATUS.em_analise = ['info', 'search', 'Em análise'];
   DT.STATUS.resolvida = ['ok', 'circle-check', 'Resolvida'];
 
-  var TABELAS = ['contrato', 'produtos', 'acoes', 'medicoes', 'medicao_itens', 'acertos', 'acerto_linhas', 'equipe',
+  var TABELAS = ['contrato', 'produtos', 'acoes', 'medicoes', 'medicao_itens', 'medicao_ajustes', 'acertos', 'acerto_linhas', 'equipe',
     'aportes', 'rateio_planejado', 'parametros', 'documentos', 'pendencias'];
   var ABAS = ['visao', 'medicoes', 'custos', 'acertos', 'documentos', 'pendencias', 'ajuda'];
   var TIPOS_DOC = {
     boletim: ['file-spreadsheet', 'Boletim de medição'], nf_emitida: ['receipt', 'NF emitida ao DNIT'],
     nf_fornecedor: ['receipt', 'NF de fornecedor'], folha: ['users', 'Folha e equipe'], comprovante: ['wallet', 'Comprovante'],
     aporte: ['hand-coins', 'Aporte de sócia'], acerto: ['file-spreadsheet', 'Acerto do consórcio'], contrato: ['landmark', 'Contrato'],
-    outro: ['file-text', 'Outro']
+    garantia: ['shield-check', 'Garantia e seguro'], outro: ['file-text', 'Outro']
   };
   var ORIGENS = { outlook: 'E-mail (Outlook)', pasta: 'Pasta do contrato', manual: 'Lançamento manual' };
   var STATUS_DOC = { recebido: 'Recebido', processando: 'Em processamento', conciliado: 'Conciliado', pendente: 'Pendente', aguardando: 'Aguardando', divergente: 'Divergente', erro: 'Erro' };
@@ -78,6 +78,7 @@
     d.produtos.sort(porOrdem);
     d.acoes.sort(porOrdem);
     d.medicoes.sort(function (a, b) { return a.numero - b.numero; });
+    d.medicao_ajustes = (d.medicao_ajustes || []).sort(function (a, b) { return a.medicao - b.medicao || a.ordem - b.ordem; });
     d.acertos.sort(function (a, b) { return a.numero - b.numero; });
     d.acerto_linhas.sort(function (a, b) { return a.acerto - b.acerto || a.ordem - b.ordem; });
     d.rateio_planejado.sort(porOrdem);
@@ -176,6 +177,16 @@
     });
     return { labels: labels, plan: plan, actual: act };
   }
+  // valores do consórcio na medição e faturamento da Dynatest (NF, retenções, recebimento)
+  function liquidoMed(m) { return +m.valor + (+m.valor_reajuste || 0) + (+m.valor_ajuste || 0); }
+  function esperadoMed(m) { return m.valor_nf == null ? null : +m.valor_nf - (+m.ret_federal || 0) - (+m.iss_retido || 0); }
+  function ajustesMed(n) { return S.d.medicao_ajustes.filter(function (a) { return a.medicao === n; }); }
+  function faturamento(medN) {
+    var ms = S.d.medicoes.filter(function (m) { return m.numero <= medN && m.valor_nf != null; });
+    var rec = ms.filter(function (m) { return m.data_recebimento; }), pend = ms.filter(function (m) { return !m.data_recebimento; });
+    return { n: ms.length, faturado: soma(ms, function (m) { return m.valor_nf; }), recebido: soma(rec, function (m) { return m.valor_recebido; }),
+      aReceber: soma(pend, esperadoMed), nPend: pend.length };
+  }
   function linhasAcerto(n) { return S.d.acerto_linhas.filter(function (l) { return l.acerto === n; }); }
   function grupoScp(L, g, campo) { return soma(L.filter(function (l) { return l.grupo === g; }), function (l) { return l[campo || 'valor_scp']; }); }
   function passosCascata(ac) {
@@ -261,30 +272,42 @@
 
   /* ---------- abas ---------- */
   function renderVisao() {
-    var d = S.d, c = d.contrato, k = calc(S.med), m = medSel(), ac = acertoSel();
+    var d = S.d, c = d.contrato, k = calc(S.med), m = medSel(), ac = acertoSel(), fat = faturamento(S.med);
     var ref = d.medicoes.some(function (x) { return x.numero <= S.med && x.oficial === false; });
     var h = secao('Visão geral – ' + nomeMed(S.med), 'Execução do <em>contrato</em>',
       'Situação até a ' + nomeMed(S.med) + (m ? ' (' + dataCurta(m.periodo_inicio) + ' a ' + dataCurta(m.periodo_fim) + ')' : '') +
       (ref ? ' · valores de referência, aguardando o boletim oficial' : ''),
       botao('atualizar', icon('refresh-cw') + 'Atualizar', '') + botao('ir', icon('file-spreadsheet') + 'Ver medição', 'dt-btn--primary', ' data-aba="medicoes"'));
     h += '<div class="dt-grid">' +
-      kpi('dt-col-3', 'landmark', 'Valor do contrato', brlc(k.total), 'Vigência ' + dataCurta(c.vigencia_inicio) + ' a ' + dataCurta(c.vigencia_fim) + ' · P0 ' + esc(c.data_base)) +
-      kpi('dt-col-3', 'route', 'Medido acumulado', brlc(k.acum), '<b>' + f.pct(k.acum / k.total) + '</b> do contrato · até a ' + nomeMed(S.med) + (ref ? ' · referência' : ''), k.acum / k.total) +
+      kpi('dt-col-3', 'landmark', 'Valor do contrato', brlc(k.total), (c.numero_dnit ? 'Contrato ' + esc(c.numero_dnit) + ' · ' : '') + 'vigência até ' + dataCurta(c.vigencia_fim) + ' · P0 ' + esc(c.data_base)) +
+      kpi('dt-col-3', 'route', 'Medido acumulado', brlc(k.acum), '<b>' + f.pct(k.acum / k.total) + '</b> do contrato a PI · até a ' + nomeMed(S.med) + (ref ? ' · referência' : ''), k.acum / k.total) +
       kpi('dt-col-3', 'wallet', 'Saldo contratual', brlc(k.saldo), f.pct(k.saldo / k.total) + ' a medir') +
-      (ac ? kpi('dt-col-3', 'hand-coins', 'Resultado da SCP · Acerto ' + ac.numero, brlc(ac.resultado_scp),
-        'Receita ' + brlc(grupoScp(linhasAcerto(ac.numero), 'receita')) + ' · repasse ' + brlc(ac.repasse)) :
-        kpi('dt-col-3', 'hand-coins', 'Resultado da SCP', '—', 'Nenhum acerto lançado')) + '</div>';
+      kpi('dt-col-3', 'receipt', 'Faturado pela Dynatest', brlc(fat.faturado), fat.n + (fat.n === 1 ? ' nota' : ' notas') + ' · recebido ' + brlc(fat.recebido) +
+        (fat.nPend ? ' · a receber ' + brlc(fat.aReceber) + ' líquidos' : '')) + '</div>';
     h += '<div class="dt-grid">' +
-      card('dt-col-8', 'Curva S do contrato', 'Planejado linear em ' + c.meses + ' meses (sem cronograma oficial) · medido até a ' + nomeMed(S.med), '<div class="dt-chart" id="g-curva"></div>') +
-      card('dt-col-4', 'Rateio planejado', 'Custos por consorciada e margem · RESUMO CONTRATO', '<div id="g-rateio"></div><p class="app-note">Margem dividida 30% Dynatest · 70% ARRB. O total do resumo não inclui a Ação 6.2 (ver pendências).</p>') +
+      card('dt-col-8', 'Curva S do contrato', 'Planejado linear em ' + c.meses + ' meses (sem cronograma oficial) · medido a PI até a ' + nomeMed(S.med), '<div class="dt-chart" id="g-curva"></div>') +
+      card('dt-col-4', 'Rateio planejado', 'Custos por consorciada e margem · RESUMO CONTRATO', '<div id="g-rateio"></div><p class="app-note">Margem dividida 30% Dynatest · 70% ARRB, já com a Ação 6.2 (diárias), que o total do resumo omitia.</p>') +
       '</div>';
+    var ms = d.medicoes.filter(function (x) { return x.numero <= S.med; });
+    var linhasMed = ms.map(function (x) {
+      var esp = esperadoMed(x), dif = x.valor_recebido != null && esp != null ? +x.valor_recebido - esp : 0;
+      return '<tr' + (x.numero === S.med ? ' class="is-selected"' : '') + '><td><b>' + nomeMed(x.numero) + '</b></td><td class="muted">' + f.month(x.periodo_fim) + '</td>' +
+        '<td class="num">' + brl(liquidoMed(x)) + '</td><td>' + (x.nf_numero ? esc(x.nf_numero) + ' · ' + f.pct(+x.part_dynatest, 0) : '—') + '</td>' +
+        '<td class="num">' + brl(x.valor_nf) + '</td><td class="num">' + (x.valor_recebido != null ? brl(x.valor_recebido) : (esp != null ? '<span class="muted">' + brl(esp) + ' esperado</span>' : '—')) +
+        (Math.abs(dif) > 1 ? '<div class="app-meta">' + brl(dif) + ' do esperado</div>' : '') + '</td><td>' + badgeMed(x.status) + '</td></tr>';
+    }).join('');
+    h += card('', 'Medições, notas e recebimentos', 'Líquido do consórcio por medição, nota da Dynatest e o que já entrou no caixa',
+      '<div class="dt-table-wrap"><table class="dt-table"><thead><tr><th>Medição</th><th>Mês</th><th class="num">Líquido do consórcio</th><th>NF Dynatest</th>' +
+      '<th class="num">Valor da NF</th><th class="num">Recebido</th><th>Situação</th></tr></thead><tbody>' + linhasMed + '</tbody><tfoot><tr><td colspan="2">Total</td>' +
+      '<td class="num">' + brl(soma(ms, liquidoMed)) + '</td><td></td><td class="num">' + brl(fat.faturado) + '</td><td class="num">' + brl(fat.recebido) + '</td><td></td></tr></tfoot></table></div>' +
+      '<p class="app-note">Recebido = valor líquido depositado, já sem tributos federais (9,45%) e, até a 5ª medição, sem o ISS retido pelo DNIT.</p>');
     if (ac) {
       h += '<div class="dt-grid">' +
         card('dt-col-8', 'Acerto ' + ac.numero + ' · visão da SCP', 'Da receita da SCP ao repasse da sócia participante', '<div class="dt-chart" id="g-cascata"></div>') +
         '<div class="dt-col-4 app-stack-tight">' +
         '<div class="dt-callout"><p class="dt-kicker">Repasse ' + ac.numero + ' – Sócia participante</p><div class="dt-callout-value">' + brl(ac.repasse) + '</div>' +
         '<div class="dt-callout-sub">Resultado da participante ' + brl(ac.resultado_participante) + (+ac.ajuste_aportes ? ' · acerto de aportes ' + brl(ac.ajuste_aportes) : '') + '</div></div>' +
-        card('', 'Divisão do resultado da SCP', 'Resultado ' + brl(ac.resultado_scp), '<div id="g-scp"></div><p class="app-note">Regra do resumo: 1/3 ostensiva · 2/3 participante.</p>') +
+        card('', 'Divisão do resultado da SCP', 'Resultado ' + brl(ac.resultado_scp), '<div id="g-scp"></div><p class="app-note">Valores do acerto ' + ac.numero + '. O contrato da SCP prevê 33,34% Dynatest · 66,66% CTX (ver pendências).</p>') +
         '</div></div>';
     }
     var abertas = d.pendencias.filter(function (p) { return p.status !== 'resolvida'; });
@@ -312,19 +335,41 @@
   function renderMedicoes() {
     var d = S.d, m = medSel();
     if (!m) return secao('Medições', 'Medições do <em>contrato</em>', '') + vazio('Nenhuma medição lançada ainda.');
-    var k = calc(S.med), total = k.total;
+    var k = calc(S.med), total = k.total, liq = liquidoMed(m), aj = ajustesMed(m.numero), esp = esperadoMed(m);
     var h = secao('Medições – ' + nomeMed(m.numero), 'Medição <em>' + pad2(m.numero) + '</em>',
-      'Período ' + dataCurta(m.periodo_inicio) + ' a ' + dataCurta(m.periodo_fim) + (m.obs ? ' · ' + txt(m.obs) : ''),
+      'Período ' + dataCurta(m.periodo_inicio) + ' a ' + dataCurta(m.periodo_fim) + (m.data_aprovacao ? ' · processada pelo DNIT em ' + dataCurta(m.data_aprovacao) : '') + (m.obs ? ' · ' + txt(m.obs) : ''),
       m.oficial === false ? '<span class="dt-tag">Valores de referência</span>' : '');
     h += '<div class="dt-grid">' +
-      kpi('dt-col-3', 'file-spreadsheet', 'Valor da medição', brlc(k.mes), f.pct(k.mes / total) + ' do contrato') +
-      kpi('dt-col-3', 'route', 'Acumulado até a ' + nomeMed(m.numero), brlc(k.acum), '<b>' + f.pct(k.acum / total) + '</b> do contrato', k.acum / total) +
-      kpi('dt-col-3', 'wallet', 'Saldo após a medição', brlc(k.saldo), f.pct(k.saldo / total) + ' a medir') +
+      kpi('dt-col-3', 'file-spreadsheet', 'Valor da medição a PI', brlc(k.mes), f.pct(k.mes / total) + ' do contrato') +
+      kpi('dt-col-3', 'receipt', 'Líquido a pagar ao consórcio', brlc(liq), 'Reajuste ' + brlc(m.valor_reajuste || 0) + ' · estornos e glosas ' + brlc(m.valor_ajuste || 0)) +
+      kpi('dt-col-3', 'route', 'Acumulado até a ' + nomeMed(m.numero), brlc(k.acum), '<b>' + f.pct(k.acum / total) + '</b> do contrato · saldo ' + brlc(k.saldo), k.acum / total) +
       '<section class="dt-card dt-col-3"><div class="dt-kpi"><div class="dt-kpi-top"><span class="dt-kpi-label">Situação</span>' + DT.hex('clock') + '</div>' +
       '<div style="margin:6px 0 8px">' + badgeMed(m.status) + '</div><dl class="app-kv">' +
-      '<dt>Aprovação</dt><dd>' + dataCurta(m.data_aprovacao) + '</dd><dt>Faturamento</dt><dd>' + dataCurta(m.data_faturamento) + '</dd>' +
-      '<dt>Recebimento</dt><dd>' + dataCurta(m.data_recebimento) + '</dd><dt>NF</dt><dd>' + esc(m.nf_numero || '—') + '</dd></dl></div></section>' +
+      '<dt>Processada pelo DNIT</dt><dd>' + dataCurta(m.data_aprovacao) + '</dd><dt>NF Dynatest</dt><dd>' + esc(m.nf_numero || '—') + '</dd>' +
+      '<dt>Emissão da NF</dt><dd>' + dataCurta(m.data_faturamento) + '</dd><dt>Recebimento</dt><dd>' + dataCurta(m.data_recebimento) + '</dd></dl></div></section>' +
       '</div>';
+    var kvLiq = '<dt>Valor a PI</dt><dd>' + brl(m.valor) + '</dd>' +
+      '<dt>Reajuste' + (+m.fator_k ? ' (K = ' + f.num(+m.fator_k, 4) + ')' : '') + '</dt><dd>' + brl(m.valor_reajuste || 0) + '</dd>' +
+      aj.map(function (a) { return '<dt>' + esc(a.descricao) + '</dt><dd>' + brl(a.valor) + '</dd>'; }).join('') +
+      '<dt><b>Líquido a pagar ao consórcio</b></dt><dd><b>' + brl(liq) + '</b></dd>';
+    var kvFat;
+    if (m.valor_nf == null) kvFat = vazio(liq ? 'Nota fiscal da Dynatest ainda não registrada.' : 'Medição sem valor: não houve nota fiscal.');
+    else {
+      var dif = m.valor_recebido != null ? +m.valor_recebido - esp : 0;
+      var pagoIss = m.iss_pago_em ? dataCurta(m.iss_pago_em) + ' · ' + brl(m.iss_pago_valor) + (m.iss_vencimento && m.iss_pago_em > m.iss_vencimento ? ' (pago depois do vencimento)' : '') : 'sem comprovante';
+      kvFat = '<dl class="app-kv"><dt>Parte da Dynatest</dt><dd>' + f.pct(+m.part_dynatest, 0) + ' do líquido</dd>' +
+        '<dt>NF ' + esc(m.nf_numero) + ' · ' + dataCurta(m.data_faturamento) + '</dt><dd>' + brl(m.valor_nf) + '</dd>' +
+        '<dt>Tributos federais retidos (9,45%)</dt><dd>' + brl(-m.ret_federal) + '</dd>' +
+        (+m.iss_retido ? '<dt>ISS retido pelo DNIT (5%)</dt><dd>' + brl(-m.iss_retido) + '</dd>' : '') +
+        '<dt><b>Líquido esperado</b></dt><dd><b>' + brl(esp) + '</b></dd>' +
+        '<dt>Recebido</dt><dd>' + (m.valor_recebido != null ? brl(m.valor_recebido) + ' em ' + dataCurta(m.data_recebimento) : 'sem registro') + '</dd>' +
+        (Math.abs(dif) > 1 ? '<dt>Diferença</dt><dd>' + brl(dif) + '</dd>' : '') +
+        (+m.iss_valor ? '<dt>ISS a recolher pela Dynatest (5%)</dt><dd>' + brl(m.iss_valor) + ' · vence ' + dataCurta(m.iss_vencimento) + '</dd><dt>ISS pago</dt><dd>' + pagoIss + '</dd>' : '') +
+        '</dl>';
+    }
+    h += '<div class="dt-grid" style="align-items:start">' +
+      card('dt-col-6', 'Do valor a PI ao líquido', 'Resumo da medição do DNIT · consórcio', '<dl class="app-kv">' + kvLiq + '</dl>') +
+      card('dt-col-6', 'Faturamento da Dynatest', 'Nota fiscal, retenções, recebimento e ISS', kvFat) + '</div>';
     var corpo = '';
     d.produtos.forEach(function (p) {
       var ls = k.linhas.filter(function (l) { return l.a.produto === p.codigo; });
@@ -369,14 +414,13 @@
     d.parametros.forEach(function (p) { (grupos[p.grupo] = grupos[p.grupo] || []).push(p); });
     var params = Object.keys(grupos).map(function (g) {
       return '<tr class="app-sub"><td colspan="2">' + esc(g) + '</td></tr>' + grupos[g].map(function (p) {
-        var v = +p.valor, txt = v < 1 ? f.pct(v, v * 100 % 1 ? 2 : 0) : brl(v);
-        if (p.chave === 'ostensiva') txt = '1/3'; if (p.chave === 'participante') txt = '2/3';
+        var v = +p.valor, txt = v < 1 ? f.pct(v, Math.round(v * 10000) % 100 ? 2 : 0) : brl(v);
         return '<tr><td>' + esc(p.descricao) + '</td><td class="num">' + txt + '</td></tr>';
       }).join('');
     }).join('');
     var impostos = d.parametros.filter(function (p) { return p.grupo === 'Impostos'; });
     params += '<tr class="app-tot"><td>Total de impostos sobre o faturamento</td><td class="num">' + f.pct(soma(impostos, function (p) { return p.valor; })) + '</td></tr>';
-    var esquerda = card('', 'Rateio planejado do contrato', 'Custos por consorciada e margem', '<div id="g-rateio2"></div><p class="app-note">Fonte: RESUMO CONTRATO (base abr/24). O total do resumo não inclui a Ação 6.2.</p>');
+    var esquerda = card('', 'Rateio planejado do contrato', 'Custos por consorciada e margem', '<div id="g-rateio2"></div><p class="app-note">Fonte: RESUMO CONTRATO (base abr/24), com a margem corrigida para incluir a Ação 6.2 (diárias), que o total do resumo omitia.</p>');
     if (ac) {
       var L = linhasAcerto(ac.numero), eq = d.equipe.filter(function (e) { return e.acerto === ac.numero; });
       var eqLinha = L.filter(function (l) { return l.grupo === 'equipe'; })[0];
@@ -388,7 +432,7 @@
           '<dl class="app-kv">' + outros.map(function (l) { return '<dt>' + txt(l.descricao) + '</dt><dd>' + brl(l.valor_consorcio) + ' · SCP ' + brl(l.valor_scp) + '</dd>'; }).join('') + '</dl>');
     }
     h += '<div class="dt-grid" style="align-items:start"><div class="dt-col-6 app-stack-tight">' + esquerda + '</div>' +
-      card('dt-col-6', 'Parâmetros dos acertos', 'Valores usados no cálculo da SCP', '<div class="dt-table-wrap"><table class="dt-table"><tbody>' + params + '</tbody></table></div>') +
+      card('dt-col-6', 'Parâmetros e regras', 'Contratos do consórcio e da SCP, retenções na nota e impostos usados nos acertos', '<div class="dt-table-wrap"><table class="dt-table"><tbody>' + params + '</tbody></table></div>') +
       '</div>';
     var linhas = d.acoes.map(function (a) {
       var p = +a.preco_unitario, dy = +a.custo_unit_dynatest, ar = +a.custo_unit_arrb, mg = p - dy - ar;
@@ -411,6 +455,8 @@
       d.acertos.map(function (a) { return '<option value="' + a.numero + '"' + (a.numero === ac.numero ? ' selected' : '') + '>Acerto ' + a.numero + ' · ' + esc(a.referencia || '') + '</option>'; }).join('') +
       '</select>' + icon('chevron-down') + '</span></label>' : '';
     var h = secao('Acertos – Acerto ' + ac.numero, 'Acerto e <em>repasse</em>', esc(ac.referencia || '') + ' · faturamento considerado ' + brl(ac.faturamento) + (ac.obs ? ' · ' + txt(ac.obs) : ''), sel);
+    var par = function (ch) { return d.parametros.filter(function (p) { return p.chave === ch; })[0]; };
+    var regraScp = par('ostensiva') && par('participante') ? [+par('ostensiva').valor, +par('participante').valor] : null;
     var acoes = '';
     if (gestor()) {
       if (ac.status === 'calculado') acoes = botao('acerto-status', icon('check') + 'Aprovar acerto', '', ' data-status="aprovado"');
@@ -423,7 +469,8 @@
       '<div class="dt-col-4 app-stack-tight"><div class="dt-callout"><p class="dt-kicker">Repasse ' + ac.numero + ' – Sócia participante</p><div class="dt-callout-value">' + brl(ac.repasse) + '</div>' +
       '<div class="dt-callout-sub">Resultado ' + brl(ac.resultado_participante) + (+ac.ajuste_aportes ? ' · acerto de aportes ' + brl(ac.ajuste_aportes) : '') + '</div></div>' +
       '<section class="dt-card"><div class="dt-card-head"><div><h2 class="dt-h3">Situação do acerto</h2></div>' + DT.badge(ac.status) + '</div>' +
-      '<dl class="app-kv"><dt>Repasse registrado em</dt><dd>' + dataCurta(ac.data_repasse) + '</dd><dt>Regra de receita usada</dt><dd>' + f.pct(+ac.regra_ostensiva, 1) + ' · ' + f.pct(+ac.regra_participante, 1) + '</dd></dl>' +
+      '<dl class="app-kv"><dt>Repasse registrado em</dt><dd>' + dataCurta(ac.data_repasse) + '</dd><dt>Regra de receita usada</dt><dd>' + f.pct(+ac.regra_ostensiva, 1) + ' · ' + f.pct(+ac.regra_participante, 1) + '</dd>' +
+      (regraScp ? '<dt>Regra do contrato da SCP</dt><dd>' + f.pct(regraScp[0], 2) + ' · ' + f.pct(regraScp[1], 2) + '</dd>' : '') + '</dl>' +
       (acoes ? '<div class="app-actions" style="align-items:flex-end">' + acoes + '</div>' : '') + '</section></div></div>';
     var L = linhasAcerto(ac.numero), corpo = '';
     function linha(l) {
@@ -530,8 +577,8 @@
         'O painel mostra a equipe por área, nunca o custo de cada pessoa.'
       ]) + '</div>';
     h += '<section class="dt-card"><div class="dt-card-head"><div><h2 class="dt-h3">O que cada aba responde</h2></div></div><div class="dt-table-wrap"><table class="dt-table"><thead><tr><th>Aba</th><th>Pergunta que responde</th><th>O que olhar primeiro</th></tr></thead><tbody>' +
-      [['Visão geral', 'Como está o contrato?', 'Medido acumulado, saldo e resultado da SCP; depois a Curva S'],
-       ['Medições', 'O que foi medido em cada ação?', 'Coluna Execução; a etiqueta “Valores de referência” indica medição ainda não oficial'],
+      [['Visão geral', 'Como está o contrato?', 'Medido acumulado, saldo e faturamento da Dynatest; depois a tabela de notas e recebimentos'],
+       ['Medições', 'O que foi medido, faturado e recebido?', 'Do valor a PI ao líquido (reajuste, estornos e glosas) e a nota da Dynatest, com retenções e ISS'],
        ['Custos e rateio', 'Como o contrato se divide e quais regras valem?', 'Rateio planejado e a tabela de parâmetros (impostos, % da SCP)'],
        ['Acertos e repasses', 'Quanto a SCP recebeu, gastou e repassa?', 'A cascata, do faturamento ao repasse, e a situação do acerto'],
        ['Documentos', 'O que já chegou e o que falta?', 'Itens “Aguardando”: são os documentos que ainda faltam'],
@@ -597,7 +644,7 @@
     $('rodape').textContent = 'DN25001 · Painel de gestão · ' + esc(dataHora(d.contrato.atualizado_em).split(' às ')[0]);
     var av = $('aviso');
     if (S.modo === 'demo') {
-      av.innerHTML = icon('file-spreadsheet') + '<span>Prévia local com os dados das planilhas. Alterações feitas aqui não são gravadas.</span>';
+      av.innerHTML = icon('file-spreadsheet') + '<span>Prévia local com os dados de demo/dados.json. Alterações feitas aqui não são gravadas.</span>';
       av.hidden = false;
     } else if (S.user && !(S.user.user_metadata || {}).senha_trocada) {
       av.innerHTML = icon('shield-check') + '<span>Primeiro acesso: troque a senha provisória por uma só sua.</span>' +
