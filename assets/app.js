@@ -183,7 +183,8 @@
   function ajustesMed(n) { return S.d.medicao_ajustes.filter(function (a) { return a.medicao === n; }); }
   function faturamento(medN) {
     var ms = S.d.medicoes.filter(function (m) { return m.numero <= medN && m.valor_nf != null; });
-    var rec = ms.filter(function (m) { return m.data_recebimento; }), pend = ms.filter(function (m) { return !m.data_recebimento; });
+    var ok = function (m) { return m.data_recebimento || m.recebido_presumido; };
+    var rec = ms.filter(ok), pend = ms.filter(function (m) { return !ok(m); });
     return { n: ms.length, faturado: soma(ms, function (m) { return m.valor_nf; }), recebido: soma(rec, function (m) { return m.valor_recebido; }),
       aReceber: soma(pend, esperadoMed), nPend: pend.length };
   }
@@ -291,16 +292,19 @@
     var ms = d.medicoes.filter(function (x) { return x.numero <= S.med; });
     var linhasMed = ms.map(function (x) {
       var esp = esperadoMed(x), dif = x.valor_recebido != null && esp != null ? +x.valor_recebido - esp : 0;
+      if (x.recebido_presumido) dif = 0;
       return '<tr' + (x.numero === S.med ? ' class="is-selected"' : '') + '><td><b>' + nomeMed(x.numero) + '</b></td><td class="muted">' + f.month(x.periodo_fim) + '</td>' +
         '<td class="num">' + brl(liquidoMed(x)) + '</td><td>' + (x.nf_numero ? esc(x.nf_numero) + ' · ' + f.pct(+x.part_dynatest, 0) : '—') + '</td>' +
         '<td class="num">' + brl(x.valor_nf) + '</td><td class="num">' + (x.valor_recebido != null ? brl(x.valor_recebido) : (esp != null ? '<span class="muted">' + brl(esp) + ' esperado</span>' : '—')) +
-        (Math.abs(dif) > 1 ? '<div class="app-meta">' + brl(dif) + ' do esperado</div>' : '') + '</td><td>' + badgeMed(x.status) + '</td></tr>';
+        (Math.abs(dif) > 1 ? '<div class="app-meta">' + brl(dif) + ' do esperado</div>' : '') + (x.recebido_presumido ? '<div class="app-meta">presumido</div>' : '') +
+        '</td><td>' + badgeMed(x.status) + '</td></tr>';
     }).join('');
     h += card('', 'Medições, notas e recebimentos', 'Líquido do consórcio por medição, nota da Dynatest e o que já entrou no caixa',
       '<div class="dt-table-wrap"><table class="dt-table"><thead><tr><th>Medição</th><th>Mês</th><th class="num">Líquido do consórcio</th><th>NF Dynatest</th>' +
       '<th class="num">Valor da NF</th><th class="num">Recebido</th><th>Situação</th></tr></thead><tbody>' + linhasMed + '</tbody><tfoot><tr><td colspan="2">Total</td>' +
       '<td class="num">' + brl(soma(ms, liquidoMed)) + '</td><td></td><td class="num">' + brl(fat.faturado) + '</td><td class="num">' + brl(fat.recebido) + '</td><td></td></tr></tfoot></table></div>' +
-      '<p class="app-note">Recebido = valor líquido depositado, já sem tributos federais (9,45%) e, até a 5ª medição, sem o ISS retido pelo DNIT.</p>');
+      '<p class="app-note">Recebido = valor líquido depositado, já sem tributos federais (9,45%) e, até a 5ª medição, sem o ISS retido pelo DNIT. ' +
+      'Sem comprovante, o que venceu há mais de 30 dias conta como recebido (presumido).</p>');
     if (ac) {
       h += '<div class="dt-grid">' +
         card('dt-col-8', 'Acerto ' + ac.numero + ' · visão da SCP', 'Da receita da SCP ao repasse da sócia participante', '<div class="dt-chart" id="g-cascata"></div>') +
@@ -355,14 +359,17 @@
     var kvFat;
     if (m.valor_nf == null) kvFat = vazio(liq ? 'Nota fiscal da Dynatest ainda não registrada.' : 'Medição sem valor: não houve nota fiscal.');
     else {
-      var dif = m.valor_recebido != null ? +m.valor_recebido - esp : 0;
-      var pagoIss = m.iss_pago_em ? dataCurta(m.iss_pago_em) + ' · ' + brl(m.iss_pago_valor) + (m.iss_vencimento && m.iss_pago_em > m.iss_vencimento ? ' (pago depois do vencimento)' : '') : 'sem comprovante';
+      var dif = m.valor_recebido != null && !m.recebido_presumido ? +m.valor_recebido - esp : 0;
+      var pagoIss = m.iss_pago_em ? dataCurta(m.iss_pago_em) + ' · ' + brl(m.iss_pago_valor) + (m.iss_vencimento && m.iss_pago_em > m.iss_vencimento ? ' (pago depois do vencimento)' : '') :
+        (m.iss_presumido ? 'presumido, sem comprovante' : 'a vencer');
+      var recebido = m.recebido_presumido ? brl(m.valor_recebido) + ' (presumido, sem comprovante)' :
+        (m.valor_recebido != null ? brl(m.valor_recebido) + ' em ' + dataCurta(m.data_recebimento) : 'a receber');
       kvFat = '<dl class="app-kv"><dt>Parte da Dynatest</dt><dd>' + f.pct(+m.part_dynatest, 0) + ' do líquido</dd>' +
         '<dt>NF ' + esc(m.nf_numero) + ' · ' + dataCurta(m.data_faturamento) + '</dt><dd>' + brl(m.valor_nf) + '</dd>' +
         '<dt>Tributos federais retidos (9,45%)</dt><dd>' + brl(-m.ret_federal) + '</dd>' +
         (+m.iss_retido ? '<dt>ISS retido pelo DNIT (5%)</dt><dd>' + brl(-m.iss_retido) + '</dd>' : '') +
         '<dt><b>Líquido esperado</b></dt><dd><b>' + brl(esp) + '</b></dd>' +
-        '<dt>Recebido</dt><dd>' + (m.valor_recebido != null ? brl(m.valor_recebido) + ' em ' + dataCurta(m.data_recebimento) : 'sem registro') + '</dd>' +
+        '<dt>Recebido</dt><dd>' + recebido + '</dd>' +
         (Math.abs(dif) > 1 ? '<dt>Diferença</dt><dd>' + brl(dif) + '</dd>' : '') +
         (+m.iss_valor ? '<dt>ISS a recolher pela Dynatest (5%)</dt><dd>' + brl(m.iss_valor) + ' · vence ' + dataCurta(m.iss_vencimento) + '</dd><dt>ISS pago</dt><dd>' + pagoIss + '</dd>' : '') +
         '</dl>';
@@ -469,7 +476,7 @@
       '<div class="dt-col-4 app-stack-tight"><div class="dt-callout"><p class="dt-kicker">Repasse ' + ac.numero + ' – Sócia participante</p><div class="dt-callout-value">' + brl(ac.repasse) + '</div>' +
       '<div class="dt-callout-sub">Resultado ' + brl(ac.resultado_participante) + (+ac.ajuste_aportes ? ' · acerto de aportes ' + brl(ac.ajuste_aportes) : '') + '</div></div>' +
       '<section class="dt-card"><div class="dt-card-head"><div><h2 class="dt-h3">Situação do acerto</h2></div>' + DT.badge(ac.status) + '</div>' +
-      '<dl class="app-kv"><dt>Repasse registrado em</dt><dd>' + dataCurta(ac.data_repasse) + '</dd><dt>Regra de receita usada</dt><dd>' + f.pct(+ac.regra_ostensiva, 1) + ' · ' + f.pct(+ac.regra_participante, 1) + '</dd>' +
+      '<dl class="app-kv"><dt>Repasse registrado em</dt><dd>' + (ac.status === 'repassado' && !ac.data_repasse ? 'sem comprovante (presumido)' : dataCurta(ac.data_repasse)) + '</dd><dt>Regra de receita usada</dt><dd>' + f.pct(+ac.regra_ostensiva, 1) + ' · ' + f.pct(+ac.regra_participante, 1) + '</dd>' +
       (regraScp ? '<dt>Regra do contrato da SCP</dt><dd>' + f.pct(regraScp[0], 2) + ' · ' + f.pct(regraScp[1], 2) + '</dd>' : '') + '</dl>' +
       (acoes ? '<div class="app-actions" style="align-items:flex-end">' + acoes + '</div>' : '') + '</section></div></div>';
     var L = linhasAcerto(ac.numero), corpo = '';
